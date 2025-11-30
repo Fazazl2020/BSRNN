@@ -7,7 +7,6 @@ import torch
 import torch.nn.functional as F
 import logging
 from torchinfo import summary
-import argparse
 from natsort import natsorted
 import librosa
 import matplotlib.pyplot as plt
@@ -15,21 +14,24 @@ import numpy as np
 from tqdm import tqdm
 from module import *
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--epochs", type=int, default=120, help="number of epochs of training")
-parser.add_argument("--batch_size", type=int, default=6)
-parser.add_argument("--log_interval", type=int, default=500)
-parser.add_argument("--decay_epoch", type=int, default=10, help="epoch from which to start lr decay")
-parser.add_argument("--init_lr", type=float, default=1e-3, help="initial learning rate")
-parser.add_argument("--cut_len", type=int, default=int(16000*2), help="cut length, default is 2 seconds in denoise "
-                                                                 "and dereverberation")
-parser.add_argument("--data_dir", type=str, default='../../dataset/VCTK-DEMAND/',
-                    help="dir of VCTK+DEMAND dataset")
-parser.add_argument("--save_model_dir", type=str, default='./saved_model',
-                    help="dir of saved model")
-parser.add_argument("--loss_weights", type=list, default=[0.5, 0.5, 1],
-                    help="weights of RI components, magnitude, and Metric Disc")
-args, _ = parser.parse_known_args()
+# ============================================
+# CONFIGURATION - HARDCODED FOR SERVER
+# ============================================
+class Config:
+    # Training hyperparameters
+    epochs = 120
+    batch_size = 6
+    log_interval = 500
+    decay_epoch = 10
+    init_lr = 1e-3
+    cut_len = int(16000 * 2)  # 2 seconds at 16kHz
+    loss_weights = [0.5, 0.5, 1]  # [RI, magnitude, Metric Disc]
+
+    # Server paths - MODIFY THESE FOR YOUR SERVER
+    data_dir = '/gdata/fewahab/data/VoicebanK-demand-16K'
+    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-5/CMGAN/saved_model'
+
+args = Config()
 logging.basicConfig(level=logging.INFO)
 
 
@@ -52,18 +54,18 @@ class Trainer:
         clean = batch[0].cuda()
         noisy = batch[1].cuda()
         one_labels = torch.ones(clean.size(0)).cuda()
-    
+
         self.optimizer.zero_grad()
         noisy_spec = torch.stft(noisy, self.n_fft, self.hop, window=torch.hann_window(self.n_fft).cuda(),
                                 onesided=True,return_complex=True)
         clean_spec = torch.stft(clean, self.n_fft, self.hop, window=torch.hann_window(self.n_fft).cuda(),
                                 onesided=True,return_complex=True)
-                
+
         est_spec = self.model(noisy_spec)
         est_mag = (torch.abs(est_spec).unsqueeze(1) + 1e-10) ** (0.3)
         clean_mag = (torch.abs(clean_spec).unsqueeze(1) + 1e-10) ** (0.3)
         noisy_mag = (torch.abs(noisy_spec).unsqueeze(1) + 1e-10) ** (0.3)
-        
+
         mae_loss = nn.L1Loss()
         loss_mag = mae_loss(est_mag, clean_mag)
         loss_ri = mae_loss(est_spec,clean_spec)
@@ -78,7 +80,7 @@ class Trainer:
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5)
         self.optimizer.step()
-        
+
         est_audio = torch.istft(est_spec, self.n_fft, self.hop, window=torch.hann_window(self.n_fft).cuda(),
                            onesided =True)
 
@@ -88,12 +90,17 @@ class Trainer:
         pesq_score = batch_pesq(clean_audio_list, est_audio_list)
         pesq_score_n = batch_pesq(est_audio_list, noisy_audio_list)
 
+        # Store PESQ score for logging (denormalize from [0,1] back to [-0.5, 4.5] range)
+        pesq_raw = None
+        if pesq_score is not None:
+            pesq_raw = (pesq_score.mean().item() * 5) - 0.5
+
         # The calculation of PESQ can be None due to silent part
         if pesq_score is not None and pesq_score_n is not None:
             self.optimizer_disc.zero_grad()
             predict_enhance_metric = self.discriminator(clean_mag, est_mag.detach())
             predict_max_metric = self.discriminator(clean_mag, clean_mag)
-            predict_min_metric = self.discriminator(est_mag.detach(), noisy_mag)            
+            predict_min_metric = self.discriminator(est_mag.detach(), noisy_mag)
             discrim_loss_metric = F.mse_loss(predict_max_metric.flatten(), one_labels.float()) + \
                                   F.mse_loss(predict_enhance_metric.flatten(), pesq_score) + \
                                   F.mse_loss(predict_min_metric.flatten(), pesq_score_n)
@@ -103,8 +110,8 @@ class Trainer:
             self.optimizer_disc.step()
         else:
             discrim_loss_metric = torch.tensor([0.])
-                
-        return loss.item(), discrim_loss_metric.item()
+
+        return loss.item(), discrim_loss_metric.item(), pesq_raw
 
     @torch.no_grad()
     def test_step(self, batch,use_disc):
@@ -116,7 +123,7 @@ class Trainer:
                                 onesided=True,return_complex=True)
         clean_spec = torch.stft(clean, self.n_fft, self.hop, window=torch.hann_window(self.n_fft).cuda(),
                                 onesided=True,return_complex=True)
-        
+
         est_spec = self.model(noisy_spec)
         est_mag = (torch.abs(est_spec).unsqueeze(1) + 1e-10) ** (0.3)
         clean_mag = (torch.abs(clean_spec).unsqueeze(1) + 1e-10) ** (0.3)
@@ -141,34 +148,45 @@ class Trainer:
         noisy_audio_list = list(noisy.cpu().numpy())
         pesq_score = batch_pesq(clean_audio_list, est_audio_list)
         pesq_score_n = batch_pesq(est_audio_list, noisy_audio_list)
+
+        # Store PESQ score for logging (denormalize from [0,1] back to [-0.5, 4.5] range)
+        pesq_raw = None
+        if pesq_score is not None:
+            pesq_raw = (pesq_score.mean().item() * 5) - 0.5
+
         if pesq_score is not None and pesq_score_n is not None:
             predict_enhance_metric = self.discriminator(clean_mag, est_mag.detach())
             predict_max_metric = self.discriminator(clean_mag, clean_mag)
-            predict_min_metric = self.discriminator(est_mag.detach(), noisy_mag)            
+            predict_min_metric = self.discriminator(est_mag.detach(), noisy_mag)
             discrim_loss_metric = F.mse_loss(predict_max_metric.flatten(), one_labels) + \
                                   F.mse_loss(predict_enhance_metric.flatten(), pesq_score) + \
                                   F.mse_loss(predict_min_metric.flatten(), pesq_score_n)
         else:
             discrim_loss_metric = torch.tensor([0.])
 
-        return loss.item(), discrim_loss_metric.item()
+        return loss.item(), discrim_loss_metric.item(), pesq_raw
 
     def test(self,use_disc):
         self.model.eval()
         self.discriminator.eval()
         gen_loss_total = 0.
         disc_loss_total = 0.
+        pesq_total = 0.
+        pesq_count = 0
         for idx, batch in enumerate(tqdm(self.test_ds)):
             step = idx + 1
-            loss, disc_loss = self.test_step(batch,use_disc)
+            loss, disc_loss, pesq_raw = self.test_step(batch,use_disc)
             gen_loss_total += loss
             disc_loss_total += disc_loss
+            if pesq_raw is not None:
+                pesq_total += pesq_raw
+                pesq_count += 1
         gen_loss_avg = gen_loss_total / step
         disc_loss_avg = disc_loss_total / step
+        pesq_avg = pesq_total / pesq_count if pesq_count > 0 else 0
 
-        template = 'Generator loss: {}, Discriminator loss: {}'
-        logging.info(
-            template.format(gen_loss_avg, disc_loss_avg))
+        template = 'TEST - Generator loss: {:.4f}, Discriminator loss: {:.4f}, PESQ: {:.4f}'
+        logging.info(template.format(gen_loss_avg, disc_loss_avg, pesq_avg))
 
         return gen_loss_avg
 
@@ -181,22 +199,28 @@ class Trainer:
 
             loss_total = 0
             loss_gan = 0
-            
+            pesq_total = 0
+            pesq_count = 0
+
             if epoch >= (args.epochs/2):
                 use_disc = True
             else:
                 use_disc = False
-            
+
             for idx, batch in enumerate(tqdm(self.train_ds)):
                 step = idx + 1
-                loss, disc_loss = self.train_step(batch,use_disc)
-                template = 'Epoch {}, Step {}, loss: {}, disc_loss: {}'
-                
+                loss, disc_loss, pesq_raw = self.train_step(batch,use_disc)
+
                 loss_total = loss_total + loss
                 loss_gan = loss_gan + disc_loss
-                
+                if pesq_raw is not None:
+                    pesq_total += pesq_raw
+                    pesq_count += 1
+
                 if (step % args.log_interval) == 0:
-                    logging.info(template.format(epoch, step, loss_total/step, loss_gan/step))
+                    pesq_avg = pesq_total/pesq_count if pesq_count > 0 else 0
+                    template = 'Epoch {}, Step {}, loss: {:.4f}, disc_loss: {:.4f}, PESQ: {:.4f}'
+                    logging.info(template.format(epoch, step, loss_total/step, loss_gan/step, pesq_avg))
 
             gen_loss = self.test(use_disc)
             path = os.path.join(args.save_model_dir, 'gene_epoch_' + str(epoch) + '_' + str(gen_loss)[:5])
