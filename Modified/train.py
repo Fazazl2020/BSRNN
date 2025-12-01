@@ -13,11 +13,15 @@ import librosa
 import numpy as np
 from tqdm import tqdm
 from module import *
+from db_transform import DB_Transform
 
 # ============================================
 # CONFIGURATION - HARDCODED FOR SERVER
 # ============================================
 class Config:
+    # Model selection: 'BSRNN' or 'DB_Transform'
+    model_type = 'DB_Transform'  # Switch to 'BSRNN' for baseline
+
     # Training hyperparameters
     epochs = 120
     batch_size = 6
@@ -29,7 +33,7 @@ class Config:
 
     # Server paths - MODIFY THESE FOR YOUR SERVER
     data_dir = '/gdata/fewahab/data/VoicebanK-demand-16K'
-    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-5/CMGAN/saved_model'
+    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-5/CMGAN/saved_model_dbtransform'  # Updated for DB-Transform
 
 args = Config()
 logging.basicConfig(level=logging.INFO)
@@ -41,12 +45,23 @@ class Trainer:
         self.hop = 128
         self.train_ds = train_ds
         self.test_ds = test_ds
-        
-        self.model = BSRNN(num_channel=64, num_layer=5).cuda()
-#         summary(self.model, [(1, 257, args.cut_len//self.hop+1, 2)])
+
+        # Model selection based on config
+        if args.model_type == 'DB_Transform':
+            self.model = DB_Transform(num_channel=128, num_heads=4).cuda()
+            logging.info("Using DB-Transform architecture (4.1M parameters)")
+        elif args.model_type == 'BSRNN':
+            self.model = BSRNN(num_channel=64, num_layer=5).cuda()
+            logging.info("Using BSRNN baseline (2.8M parameters)")
+        else:
+            raise ValueError(f"Unknown model_type: {args.model_type}")
+
+        # Count and display parameters
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        logging.info(f"Model parameters: Total={total_params/1e6:.2f}M, Trainable={trainable_params/1e6:.2f}M")
+
         self.discriminator = Discriminator(ndf=16).cuda()
-# #         summary(self.discriminator, [(1, 1, int(self.n_fft/2)+1, args.cut_len//self.hop+1),
-# #                                      (1, 1, int(self.n_fft/2)+1, args.cut_len//self.hop+1)])
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.init_lr)
         self.optimizer_disc = torch.optim.Adam(self.discriminator.parameters(), lr=args.init_lr)
         
