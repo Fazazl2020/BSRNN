@@ -144,20 +144,20 @@ class MBS_Net(nn.Module):
         Returns:
             enhanced: Enhanced complex spectrogram [B, F, T]
         """
-        # Save original shape info
-        is_complex_input = torch.is_complex(x)
-
         # Convert to real/imag format for BandSplit
+        # BandSplit expects [B, F, T, 2] format (like torch.view_as_real output)
         if torch.is_complex(x):
-            # [B, F, T] complex -> [B, 2, F, T] real/imag
-            x_real_imag = torch.stack([x.real, x.imag], dim=1)
+            # [B, F, T] complex -> [B, F, T, 2] real/imag
+            x_real_imag = torch.view_as_real(x)
         else:
-            if x.shape[1] == 2:
-                # Already in [B, 2, F, T] format
+            if x.ndim == 4 and x.shape[-1] == 2:
+                # Already in [B, F, T, 2] format
                 x_real_imag = x
+            elif x.ndim == 4 and x.shape[1] == 2:
+                # [B, 2, F, T] -> [B, F, T, 2]
+                x_real_imag = x.permute(0, 2, 3, 1)
             else:
-                # [B, F, T, 2] -> [B, 2, F, T]
-                x_real_imag = x.permute(0, 3, 1, 2)
+                raise ValueError(f"Unexpected input shape: {x.shape}")
 
         # Stage 1: Band-split
         z = self.band_split(x_real_imag)  # [B, N, T, 30]
@@ -169,23 +169,26 @@ class MBS_Net(nn.Module):
         masks = self.mask_decoder(features)  # [B, 2, F, 3, 2]
 
         # Stage 4: Apply masks to input spectrum
+        # Following BSRNN pattern (see module.py lines 62-69)
         # masks shape: [B, 2, F, 3, 2]
-        # We'll use the complex mask (index 2 in dim 3)
-        # Extract real and imaginary masks
-        mask_real = masks[:, 0, :, 2, 0]  # [B, F]
-        mask_imag = masks[:, 1, :, 2, 1]  # [B, F]
+        # Convert masks to complex for easier manipulation
+        masks_complex = torch.view_as_complex(masks)  # [B, 2, F, 3]
+        x_complex = torch.view_as_complex(x_real_imag)  # [B, F, T]
 
-        # Expand to time dimension
-        T = x_real_imag.shape[3]
-        mask_real = mask_real.unsqueeze(2).expand(-1, -1, T)  # [B, F, T]
-        mask_imag = mask_imag.unsqueeze(2).expand(-1, -1, T)  # [B, F, T]
+        # Apply 3-tap filter (like BSRNN)
+        # m[:,:,1:-1,0]*x[:,:,:-2] + m[:,:,1:-1,1]*x[:,:,1:-1] + m[:,:,1:-1,2]*x[:,:,2:]
+        s = (masks_complex[:, 0, 1:-1, 0].unsqueeze(-1) * x_complex[:, :-2, :] +
+             masks_complex[:, 0, 1:-1, 1].unsqueeze(-1) * x_complex[:, 1:-1, :] +
+             masks_complex[:, 0, 1:-1, 2].unsqueeze(-1) * x_complex[:, 2:, :])
 
-        # Apply masks
-        enhanced_real = x_real_imag[:, 0] * mask_real  # [B, F, T]
-        enhanced_imag = x_real_imag[:, 1] * mask_imag  # [B, F, T]
+        # First and last frequency bins (special cases)
+        s_f = (masks_complex[:, 0, 0, 1].unsqueeze(-1) * x_complex[:, 0, :] +
+               masks_complex[:, 0, 0, 2].unsqueeze(-1) * x_complex[:, 1, :])
+        s_l = (masks_complex[:, 0, -1, 0].unsqueeze(-1) * x_complex[:, -2, :] +
+               masks_complex[:, 0, -1, 1].unsqueeze(-1) * x_complex[:, -1, :])
 
-        # Combine to complex
-        enhanced = torch.complex(enhanced_real, enhanced_imag)  # [B, F, T]
+        # Concatenate
+        enhanced = torch.cat([s_f.unsqueeze(1), s, s_l.unsqueeze(1)], dim=1)  # [B, F, T]
 
         # Optional PCS post-processing
         if use_pcs:
