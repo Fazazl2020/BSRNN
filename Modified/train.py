@@ -9,11 +9,9 @@ import logging
 from torchinfo import summary
 from natsort import natsorted
 import librosa
-# import matplotlib.pyplot as plt  # Not used - removed for server compatibility
 import numpy as np
 from tqdm import tqdm
 from module import *
-from db_transform import DB_Transform
 from mbs_net import MBS_Net
 
 # ============================================
@@ -42,7 +40,7 @@ class Config:
 
     # Server paths - MODIFY THESE FOR YOUR SERVER
     data_dir = '/gdata/fewahab/data/VoicebanK-demand-16K'
-    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-5/CMGAN/saved_model_mbsnet'  # Updated for MBS-Net
+    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-6/M1/saved_model_mbsnet'  # Updated for MBS-Net
 
 args = Config()
 logging.basicConfig(level=logging.INFO)
@@ -90,7 +88,7 @@ class Trainer:
         est_phase = torch.angle(est_spec)
         clean_phase = torch.angle(clean_spec)
 
-        # Wrap phase difference to [-π, π]
+        # Wrap phase difference to [-p, p]
         phase_diff = torch.remainder(est_phase - clean_phase + np.pi, 2*np.pi) - np.pi
 
         # L1 loss on wrapped difference
@@ -303,4 +301,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
