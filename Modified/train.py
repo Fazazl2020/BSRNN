@@ -12,15 +12,14 @@ import librosa
 import numpy as np
 from tqdm import tqdm
 from module import *
-from mbs_net import MBS_Net as MBS_Net_Original
-from mbs_net_optimized import MBS_Net as MBS_Net_Optimized
+from mbs_net import MBS_Net 
 
 # ============================================
 # CONFIGURATION - HARDCODED FOR SERVER
 # ============================================
 class Config:
-    # Model selection: 'BSRNN', 'DB_Transform', 'MBS_Net', or 'MBS_Net_Optimized'
-    model_type = 'MBS_Net_Optimized'  # Recommended: MBS_Net_Optimized (memory-efficient)
+    # Model selection: 'BSRNN', 'DB_Transform', 'MBS_Net', or 'MBS_Net'
+    model_type = 'MBS_Net'  # Recommended: MBS_Net (memory-efficient)
 
     # Training hyperparameters
     epochs = 120
@@ -55,8 +54,8 @@ class Trainer:
         self.test_ds = test_ds
 
         # Model selection based on config
-        if args.model_type == 'MBS_Net_Optimized':
-            self.model = MBS_Net_Optimized(
+        if args.model_type == 'MBS_Net':
+            self.model = MBS_Net(
                 num_channel=128,
                 num_layers=4,
                 num_bands=30,
@@ -127,7 +126,7 @@ class Trainer:
         loss_ri = mae_loss(est_spec,clean_spec)
 
         # Add phase loss for MBS_Net variants (explicit phase modeling)
-        if args.model_type in ['MBS_Net', 'MBS_Net_Optimized']:
+        if args.model_type in ['MBS_Net', 'MBS_Net']:
             loss_phase = self.compute_phase_loss(est_spec, clean_spec)
         else:
             loss_phase = torch.tensor(0.0).cuda()
