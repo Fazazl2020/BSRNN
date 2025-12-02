@@ -167,29 +167,32 @@ class MBS_Net(nn.Module):
         features = self.encoder(z)  # [B, N, T, 30]
 
         # Stage 3: Mask generation
-        masks = self.mask_decoder(features)  # [B, 2, F, 3, 2]
+        # MaskDecoder returns [B, F, T, 3, 2] (not [B, 2, F, 3, 2]!)
+        masks = self.mask_decoder(features)  # [B, F, T, 3, 2]
 
         # Stage 4: Apply masks to input spectrum
-        # Following BSRNN pattern (see module.py lines 62-69)
-        # masks shape: [B, 2, F, 3, 2]
-        # Convert masks to complex for easier manipulation
-        masks_complex = torch.view_as_complex(masks)  # [B, 2, F, 3]
+        # Following BSRNN pattern exactly (module.py lines 62-69)
+        # Convert masks and input to complex
+        masks_complex = torch.view_as_complex(masks)  # [B, F, T, 3]
         x_complex = torch.view_as_complex(x_real_imag)  # [B, F, T]
 
-        # Apply 3-tap filter (like BSRNN)
-        # m[:,:,1:-1,0]*x[:,:,:-2] + m[:,:,1:-1,1]*x[:,:,1:-1] + m[:,:,1:-1,2]*x[:,:,2:]
-        s = (masks_complex[:, 0, 1:-1, 0].unsqueeze(-1) * x_complex[:, :-2, :] +
-             masks_complex[:, 0, 1:-1, 1].unsqueeze(-1) * x_complex[:, 1:-1, :] +
-             masks_complex[:, 0, 1:-1, 2].unsqueeze(-1) * x_complex[:, 2:, :])
+        # Apply 3-tap filter (exactly like BSRNN)
+        # Note: 3-tap filter is applied across TIME dimension (dim 2), not frequency!
+        # s = m[:,:,1:-1,0]*x[:,:,:-2] + m[:,:,1:-1,1]*x[:,:,1:-1] + m[:,:,1:-1,2]*x[:,:,2:]
+        s = (masks_complex[:, :, 1:-1, 0] * x_complex[:, :, :-2] +
+             masks_complex[:, :, 1:-1, 1] * x_complex[:, :, 1:-1] +
+             masks_complex[:, :, 1:-1, 2] * x_complex[:, :, 2:])
 
-        # First and last frequency bins (special cases)
-        s_f = (masks_complex[:, 0, 0, 1].unsqueeze(-1) * x_complex[:, 0, :] +
-               masks_complex[:, 0, 0, 2].unsqueeze(-1) * x_complex[:, 1, :])
-        s_l = (masks_complex[:, 0, -1, 0].unsqueeze(-1) * x_complex[:, -2, :] +
-               masks_complex[:, 0, -1, 1].unsqueeze(-1) * x_complex[:, -1, :])
+        # First and last time frames (special cases)
+        # s_f = m[:,:,0,1]*x[:,:,0] + m[:,:,0,2]*x[:,:,1]
+        s_f = (masks_complex[:, :, 0, 1] * x_complex[:, :, 0] +
+               masks_complex[:, :, 0, 2] * x_complex[:, :, 1])
+        # s_l = m[:,:,-1,0]*x[:,:,-2] + m[:,:,-1,1]*x[:,:,-1]
+        s_l = (masks_complex[:, :, -1, 0] * x_complex[:, :, -2] +
+               masks_complex[:, :, -1, 1] * x_complex[:, :, -1])
 
-        # Concatenate
-        enhanced = torch.cat([s_f.unsqueeze(1), s, s_l.unsqueeze(1)], dim=1)  # [B, F, T]
+        # Concatenate: s = torch.cat((s_f.unsqueeze(2), s, s_l.unsqueeze(2)), dim=2)
+        enhanced = torch.cat([s_f.unsqueeze(2), s, s_l.unsqueeze(2)], dim=2)  # [B, F, T]
 
         # Optional PCS post-processing
         if use_pcs:
