@@ -13,13 +13,14 @@ import numpy as np
 from tqdm import tqdm
 from module import *
 from mbs_net import MBS_Net
+from mbs_net_optimized import MBS_Net_Optimized
 
 # ============================================
 # CONFIGURATION - HARDCODED FOR SERVER
 # ============================================
 class Config:
-    # Model selection: 'BSRNN', 'DB_Transform', or 'MBS_Net'
-    model_type = 'MBS_Net'  # Recommended: MBS_Net (2024 SOTA-based)
+    # Model selection: 'BSRNN', 'DB_Transform', 'MBS_Net', or 'MBS_Net_Optimized'
+    model_type = 'MBS_Net_Optimized'  # Recommended: MBS_Net_Optimized (memory-efficient)
 
     # Training hyperparameters
     epochs = 120
@@ -54,7 +55,16 @@ class Trainer:
         self.test_ds = test_ds
 
         # Model selection based on config
-        if args.model_type == 'MBS_Net':
+        if args.model_type == 'MBS_Net_Optimized':
+            self.model = MBS_Net_Optimized(
+                num_channel=128,
+                num_layers=4,
+                num_bands=30,
+                d_state=12,
+                chunk_size=32
+            ).cuda()
+            logging.info("Using MBS-Net Optimized (memory-efficient, ~2.3M params)")
+        elif args.model_type == 'MBS_Net':
             self.model = MBS_Net(num_channel=128, num_layers=4).cuda()
             logging.info("Using MBS-Net architecture (Mamba + Explicit Phase)")
         elif args.model_type == 'DB_Transform':
@@ -116,8 +126,8 @@ class Trainer:
         loss_mag = mae_loss(est_mag, clean_mag)
         loss_ri = mae_loss(est_spec,clean_spec)
 
-        # Add phase loss for MBS_Net (explicit phase modeling)
-        if args.model_type == 'MBS_Net':
+        # Add phase loss for MBS_Net variants (explicit phase modeling)
+        if args.model_type in ['MBS_Net', 'MBS_Net_Optimized']:
             loss_phase = self.compute_phase_loss(est_spec, clean_spec)
         else:
             loss_phase = torch.tensor(0.0).cuda()
