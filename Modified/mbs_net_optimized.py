@@ -160,7 +160,8 @@ class MBS_Net(nn.Module):
                 raise ValueError(f"Unexpected input shape: {x.shape}")
 
         # Stage 1: Band-split
-        z = self.band_split(x_real_imag)  # [B, N, T, 30]
+        # BandSplit outputs [B, T, N, K], need to transpose to [B, N, T, K]
+        z = self.band_split(x_real_imag).transpose(1, 2)  # [B, N, T, 30]
 
         # Stage 2: Shared encoding with Mamba
         features = self.encoder(z)  # [B, N, T, 30]
