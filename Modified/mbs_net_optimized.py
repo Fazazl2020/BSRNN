@@ -218,9 +218,9 @@ class DualBranchDecoder(nn.Module):
         return enhanced
 
 
-class MBS_Net_Optimized(nn.Module):
+class MBS_Net(nn.Module):
     """
-    MBS-Net Optimized: Memory-Efficient Mamba Band-Split Network
+    MBS-Net: Memory-Efficient Mamba Band-Split Network (Optimized Version)
 
     Architecture:
     1. BandSplit: 30 psychoacoustic bands
@@ -339,8 +339,8 @@ if __name__ == '__main__':
     print("=" * 60)
 
     # Create model
-    print("\n1. Creating MBS_Net_Optimized...")
-    model = MBS_Net_Optimized(
+    print("\n1. Creating MBS_Net (Optimized)...")
+    model = MBS_Net(
         num_channel=128,
         num_layers=4,
         num_bands=30,

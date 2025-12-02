@@ -12,8 +12,8 @@ import librosa
 import numpy as np
 from tqdm import tqdm
 from module import *
-from mbs_net import MBS_Net
-from mbs_net_optimized import MBS_Net_Optimized
+from mbs_net import MBS_Net as MBS_Net_Original
+from mbs_net_optimized import MBS_Net as MBS_Net_Optimized
 
 # ============================================
 # CONFIGURATION - HARDCODED FOR SERVER
@@ -65,7 +65,7 @@ class Trainer:
             ).cuda()
             logging.info("Using MBS-Net Optimized (memory-efficient, ~2.3M params)")
         elif args.model_type == 'MBS_Net':
-            self.model = MBS_Net(num_channel=128, num_layers=4).cuda()
+            self.model = MBS_Net_Original(num_channel=128, num_layers=4).cuda()
             logging.info("Using MBS-Net architecture (Mamba + Explicit Phase)")
         elif args.model_type == 'DB_Transform':
             self.model = DB_Transform(num_channel=128, num_heads=4).cuda()
