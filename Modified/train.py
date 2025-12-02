@@ -14,13 +14,14 @@ import numpy as np
 from tqdm import tqdm
 from module import *
 from db_transform import DB_Transform
+from mbs_net import MBS_Net
 
 # ============================================
 # CONFIGURATION - HARDCODED FOR SERVER
 # ============================================
 class Config:
-    # Model selection: 'BSRNN' or 'DB_Transform'
-    model_type = 'DB_Transform'  # Switch to 'BSRNN' for baseline
+    # Model selection: 'BSRNN', 'DB_Transform', or 'MBS_Net'
+    model_type = 'MBS_Net'  # Recommended: MBS_Net (2024 SOTA-based)
 
     # Training hyperparameters
     epochs = 120
@@ -29,11 +30,19 @@ class Config:
     decay_epoch = 10
     init_lr = 1e-3
     cut_len = int(16000 * 2)  # 2 seconds at 16kHz
-    loss_weights = [0.5, 0.5, 1]  # [RI, magnitude, Metric Disc]
+
+    # Loss weights [RI, magnitude, phase, Metric Disc]
+    # For MBS_Net: Use phase loss
+    # For BSRNN/DB_Transform: phase weight = 0
+    loss_weights = [0.3, 0.3, 0.4, 1.0]  # Added phase loss weight
+
+    # MBS-Net specific
+    use_pcs = False  # Use PCS during training (True) or only inference (False)
+    pcs_alpha = 0.3  # PCS strength
 
     # Server paths - MODIFY THESE FOR YOUR SERVER
     data_dir = '/gdata/fewahab/data/VoicebanK-demand-16K'
-    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-5/CMGAN/saved_model_dbtransform'  # Updated for DB-Transform
+    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-5/CMGAN/saved_model_mbsnet'  # Updated for MBS-Net
 
 args = Config()
 logging.basicConfig(level=logging.INFO)
@@ -47,12 +56,15 @@ class Trainer:
         self.test_ds = test_ds
 
         # Model selection based on config
-        if args.model_type == 'DB_Transform':
+        if args.model_type == 'MBS_Net':
+            self.model = MBS_Net(num_channel=128, num_layers=4).cuda()
+            logging.info("Using MBS-Net architecture (Mamba + Explicit Phase)")
+        elif args.model_type == 'DB_Transform':
             self.model = DB_Transform(num_channel=128, num_heads=4).cuda()
-            logging.info("Using DB-Transform architecture (4.1M parameters)")
+            logging.info("Using DB-Transform architecture")
         elif args.model_type == 'BSRNN':
             self.model = BSRNN(num_channel=64, num_layer=5).cuda()
-            logging.info("Using BSRNN baseline (2.8M parameters)")
+            logging.info("Using BSRNN baseline")
         else:
             raise ValueError(f"Unknown model_type: {args.model_type}")
 
@@ -64,7 +76,28 @@ class Trainer:
         self.discriminator = Discriminator(ndf=16).cuda()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.init_lr)
         self.optimizer_disc = torch.optim.Adam(self.discriminator.parameters(), lr=args.init_lr)
-        
+
+    def compute_phase_loss(self, est_spec, clean_spec):
+        """
+        Compute wrapped phase loss for explicit phase modeling.
+
+        Args:
+            est_spec: Estimated complex spectrogram
+            clean_spec: Clean complex spectrogram
+        Returns:
+            phase_loss: L1 loss on wrapped phase difference
+        """
+        est_phase = torch.angle(est_spec)
+        clean_phase = torch.angle(clean_spec)
+
+        # Wrap phase difference to [-π, π]
+        phase_diff = torch.remainder(est_phase - clean_phase + np.pi, 2*np.pi) - np.pi
+
+        # L1 loss on wrapped difference
+        phase_loss = F.l1_loss(phase_diff, torch.zeros_like(phase_diff))
+
+        return phase_loss
+
     def train_step(self, batch, use_disc):
         clean = batch[0].cuda()
         noisy = batch[1].cuda()
@@ -85,12 +118,19 @@ class Trainer:
         loss_mag = mae_loss(est_mag, clean_mag)
         loss_ri = mae_loss(est_spec,clean_spec)
 
+        # Add phase loss for MBS_Net (explicit phase modeling)
+        if args.model_type == 'MBS_Net':
+            loss_phase = self.compute_phase_loss(est_spec, clean_spec)
+        else:
+            loss_phase = torch.tensor(0.0).cuda()
+
         if use_disc is False:
-            loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag
+            # loss_weights = [RI, magnitude, phase, Metric Disc]
+            loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag + args.loss_weights[2] * loss_phase
         else:
             predict_fake_metric = self.discriminator(clean_mag, est_mag)
             gen_loss_GAN = F.mse_loss(predict_fake_metric.flatten(), one_labels.float())
-            loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag + args.loss_weights[2] * gen_loss_GAN
+            loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag + args.loss_weights[2] * loss_phase + args.loss_weights[3] * gen_loss_GAN
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5)
@@ -148,12 +188,18 @@ class Trainer:
         loss_mag = mae_loss(est_mag, clean_mag)
         loss_ri = mae_loss(est_spec, clean_spec)
 
+        # Add phase loss for MBS_Net
+        if args.model_type == 'MBS_Net':
+            loss_phase = self.compute_phase_loss(est_spec, clean_spec)
+        else:
+            loss_phase = torch.tensor(0.0).cuda()
+
         if use_disc is False:
-            loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag
+            loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag + args.loss_weights[2] * loss_phase
         else:
             predict_fake_metric = self.discriminator(clean_mag, est_mag)
             gen_loss_GAN = F.mse_loss(predict_fake_metric.flatten(), one_labels.float())
-            loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag + args.loss_weights[2] * gen_loss_GAN
+            loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag + args.loss_weights[2] * loss_phase + args.loss_weights[3] * gen_loss_GAN
 
         est_audio = torch.istft(est_spec, self.n_fft, self.hop, window=torch.hann_window(self.n_fft).cuda(),
                            onesided =True)
