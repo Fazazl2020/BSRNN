@@ -24,7 +24,7 @@ class TrainingConfig:
     All key parameters in one place at the top of the file.
     """
     # Model Selection
-    model_type = 'BSRNN'  # Options: 'BSRNN', 'MBS_Net_Optimized' (add your models)
+    model_type = 'MBS_Net_Optimized'  # Options: 'BSRNN', 'MBS_Net_Optimized'
 
     # Training Hyperparameters
     batch_size = 6        # Reduce if OOM, increase if memory available
@@ -78,8 +78,30 @@ class Trainer:
         self.train_ds = train_ds
         self.test_ds = test_ds
 
-        # Initialize model
-        self.model = BSRNN(num_channel=64, num_layer=5).cuda()
+        # Initialize model based on TrainingConfig.model_type
+        if TrainingConfig.model_type == 'BSRNN':
+            self.model = BSRNN(num_channel=64, num_layer=5).cuda()
+            logging.info("Using BSRNN baseline model")
+        elif TrainingConfig.model_type == 'MBS_Net_Optimized':
+            # Import here to avoid circular dependency
+            from mbs_net_optimized import MBS_Net
+            self.model = MBS_Net(
+                num_channel=128,
+                num_layers=4,
+                num_bands=30,
+                d_state=12,
+                chunk_size=32
+            ).cuda()
+            logging.info("Using MBS-Net Optimized (literature-based, ~2.1M params)")
+        else:
+            raise ValueError(f"Unknown model_type: {TrainingConfig.model_type}. "
+                           f"Options: 'BSRNN', 'MBS_Net_Optimized'")
+
+        # Log parameter count
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        logging.info(f"Model parameters: Total={total_params/1e6:.2f}M, Trainable={trainable_params/1e6:.2f}M")
+
         self.discriminator = Discriminator(ndf=16).cuda()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.init_lr)
         self.optimizer_disc = torch.optim.Adam(self.discriminator.parameters(), lr=args.init_lr)
