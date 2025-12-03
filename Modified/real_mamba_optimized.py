@@ -143,10 +143,15 @@ class SelectiveSSM(nn.Module):
             # Discretize for this chunk only (MEMORY SAVING!)
             # A_bar = exp(dt * A)
             dt_A = dt_chunk.unsqueeze(-1) * A.unsqueeze(0).unsqueeze(0)  # (B, chunk_len, D, N)
+
+            # NUMERICAL STABILITY: Clamp dt_A to prevent overflow in exp()
+            dt_A = torch.clamp(dt_A, min=-10.0, max=0.0)  # Should be negative since A is negative
             A_bar = torch.exp(dt_A)  # Only chunk_len frames, not full L!
 
             # B_bar = dt * B (approximately, for small dt)
-            B_bar = dt_chunk.unsqueeze(-1) * B_chunk.unsqueeze(2)  # (B, chunk_len, D, N)
+            # NUMERICAL STABILITY: Clamp dt to prevent extreme values
+            dt_chunk_clamped = torch.clamp(dt_chunk, min=0.0, max=1.0)
+            B_bar = dt_chunk_clamped.unsqueeze(-1) * B_chunk.unsqueeze(2)  # (B, chunk_len, D, N)
 
             # Scan this chunk
             chunk_output, h = self._scan_chunk(x_chunk, A_bar, B_bar, C_chunk, D, h)
@@ -173,13 +178,27 @@ class SelectiveSSM(nn.Module):
         h = h_init
         outputs = []
 
+        # NUMERICAL STABILITY: Clamp A_bar to prevent state explosion
+        # A_bar should be in (0, 1) for proper decay, but numerical errors can push it >= 1
+        A_bar = torch.clamp(A_bar, min=0.0, max=0.999)
+
+        # NUMERICAL STABILITY: Clamp B_bar to prevent input explosion
+        B_bar = torch.clamp(B_bar, min=-10.0, max=10.0)
+
         # Recurrent computation
         for t in range(chunk_len):
             # h_t = A_bar_t * h_{t-1} + B_bar_t * x_t
             h = A_bar[:, t] * h + B_bar[:, t] * x[:, t].unsqueeze(-1)  # (B, D, N)
 
+            # NUMERICAL STABILITY: Clamp hidden state to prevent explosion
+            h = torch.clamp(h, min=-100.0, max=100.0)
+
             # y_t = C_t * h_t + D * x_t
             y_t = torch.einsum('bdn,bn->bd', h, C[:, t]) + D * x[:, t]  # (B, D)
+
+            # NUMERICAL STABILITY: Clamp output to prevent NaN propagation
+            y_t = torch.clamp(y_t, min=-50.0, max=50.0)
+
             outputs.append(y_t)
 
         y = torch.stack(outputs, dim=1)  # (B, chunk_len, D)
