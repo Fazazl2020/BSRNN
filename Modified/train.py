@@ -42,8 +42,113 @@ class Config:
     data_dir = '/gdata/fewahab/data/VoicebanK-demand-16K'
     save_model_dir = '/ghome/fewahab/Sun-Models/Ab-6/M1/saved_model_mbsnet'  # Updated for MBS-Net
 
+    # Resume training from checkpoint
+    resume = False  # Set to True to resume from last checkpoint
+    resume_path = None  # Will auto-detect latest checkpoint if None
+
+    # Progress bar settings
+    disable_progress_bar = False  # Set to True to reduce log verbosity
+
 args = Config()
 logging.basicConfig(level=logging.INFO)
+
+
+# ============================================
+# UTILITY FUNCTIONS
+# ============================================
+def check_nan_inf(tensor, name, raise_error=True):
+    """Check for NaN/Inf and optionally log statistics"""
+    has_nan = torch.isnan(tensor).any().item()
+    has_inf = torch.isinf(tensor).any().item()
+
+    if has_nan or has_inf:
+        msg = f"⚠️  NaN/Inf detected in {name}!"
+        msg += f"\n   NaN: {has_nan}, Inf: {has_inf}"
+        msg += f"\n   Min: {tensor[~torch.isnan(tensor)].min() if not has_nan else 'NaN'}"
+        msg += f"\n   Max: {tensor[~torch.isinf(tensor)].max() if not has_inf else 'Inf'}"
+        msg += f"\n   Shape: {tensor.shape}"
+        logging.error(msg)
+        if raise_error:
+            raise ValueError(f"NaN/Inf in {name}")
+    return has_nan or has_inf
+
+
+def save_checkpoint(epoch, model, discriminator, optimizer, optimizer_disc,
+                   scheduler_G, scheduler_D, gen_loss, save_dir):
+    """Save complete training checkpoint"""
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'discriminator_state_dict': discriminator.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'optimizer_disc_state_dict': optimizer_disc.state_dict(),
+        'scheduler_G_state_dict': scheduler_G.state_dict(),
+        'scheduler_D_state_dict': scheduler_D.state_dict(),
+        'gen_loss': gen_loss,
+        'config': {
+            'model_type': args.model_type,
+            'init_lr': args.init_lr,
+            'batch_size': args.batch_size,
+        }
+    }
+
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    # Save with epoch number
+    checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch}.pt')
+    torch.save(checkpoint, checkpoint_path)
+
+    # Also save as latest
+    latest_path = os.path.join(save_dir, 'checkpoint_latest.pt')
+    torch.save(checkpoint, latest_path)
+
+    logging.info(f"✓ Checkpoint saved: {checkpoint_path}")
+    return checkpoint_path
+
+
+def load_checkpoint(checkpoint_path, model, discriminator, optimizer,
+                   optimizer_disc, scheduler_G, scheduler_D):
+    """Load checkpoint and restore training state"""
+    if not os.path.exists(checkpoint_path):
+        logging.warning(f"Checkpoint not found: {checkpoint_path}")
+        return 0
+
+    logging.info(f"Loading checkpoint: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path)
+
+    model.load_state_dict(checkpoint['model_state_dict'])
+    discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    optimizer_disc.load_state_dict(checkpoint['optimizer_disc_state_dict'])
+    scheduler_G.load_state_dict(checkpoint['scheduler_G_state_dict'])
+    scheduler_D.load_state_dict(checkpoint['scheduler_D_state_dict'])
+
+    start_epoch = checkpoint['epoch'] + 1
+    logging.info(f"✓ Resumed from epoch {checkpoint['epoch']}, starting epoch {start_epoch}")
+    logging.info(f"   Previous loss: {checkpoint['gen_loss']:.4f}")
+
+    return start_epoch
+
+
+def find_latest_checkpoint(save_dir):
+    """Find the latest checkpoint in directory"""
+    latest_path = os.path.join(save_dir, 'checkpoint_latest.pt')
+    if os.path.exists(latest_path):
+        return latest_path
+
+    # Fallback: find highest epoch number
+    if not os.path.exists(save_dir):
+        return None
+
+    checkpoints = [f for f in os.listdir(save_dir) if f.startswith('checkpoint_epoch_')]
+    if not checkpoints:
+        return None
+
+    # Extract epoch numbers and find max
+    epochs = [int(f.split('_')[2].split('.')[0]) for f in checkpoints]
+    latest_epoch = max(epochs)
+    return os.path.join(save_dir, f'checkpoint_epoch_{latest_epoch}.pt')
 
 
 class Trainer:
@@ -94,14 +199,23 @@ class Trainer:
         Returns:
             phase_loss: L1 loss on wrapped phase difference
         """
-        est_phase = torch.angle(est_spec)
-        clean_phase = torch.angle(clean_spec)
+        # NUMERICAL STABILITY: Add small epsilon to prevent angle() instability
+        # when magnitude is near zero
+        eps = 1e-8
+        est_spec_stable = est_spec + eps
+        clean_spec_stable = clean_spec + eps
 
-        # Wrap phase difference to [-p, p]
+        est_phase = torch.angle(est_spec_stable)
+        clean_phase = torch.angle(clean_spec_stable)
+
+        # Wrap phase difference to [-π, π]
         phase_diff = torch.remainder(est_phase - clean_phase + np.pi, 2*np.pi) - np.pi
 
         # L1 loss on wrapped difference
         phase_loss = F.l1_loss(phase_diff, torch.zeros_like(phase_diff))
+
+        # Check for NaN
+        check_nan_inf(phase_loss, "phase_loss", raise_error=True)
 
         return phase_loss
 
@@ -117,6 +231,10 @@ class Trainer:
                                 onesided=True,return_complex=True)
 
         est_spec = self.model(noisy_spec)
+
+        # CRITICAL: Check for NaN immediately after model forward
+        check_nan_inf(est_spec, "est_spec", raise_error=True)
+
         est_mag = (torch.abs(est_spec).unsqueeze(1) + 1e-10) ** (0.3)
         clean_mag = (torch.abs(clean_spec).unsqueeze(1) + 1e-10) ** (0.3)
         noisy_mag = (torch.abs(noisy_spec).unsqueeze(1) + 1e-10) ** (0.3)
@@ -124,6 +242,10 @@ class Trainer:
         mae_loss = nn.L1Loss()
         loss_mag = mae_loss(est_mag, clean_mag)
         loss_ri = mae_loss(est_spec,clean_spec)
+
+        # Check losses
+        check_nan_inf(loss_mag, "loss_mag", raise_error=True)
+        check_nan_inf(loss_ri, "loss_ri", raise_error=True)
 
         # Add phase loss for MBS_Net variants (explicit phase modeling)
         if args.model_type in ['MBS_Net', 'MBS_Net']:
@@ -138,6 +260,9 @@ class Trainer:
             predict_fake_metric = self.discriminator(clean_mag, est_mag)
             gen_loss_GAN = F.mse_loss(predict_fake_metric.flatten(), one_labels.float())
             loss = args.loss_weights[0] * loss_ri + args.loss_weights[1] * loss_mag + args.loss_weights[2] * loss_phase + args.loss_weights[3] * gen_loss_GAN
+
+        # Final NaN check before backward
+        check_nan_inf(loss, "total_loss", raise_error=True)
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5)
@@ -241,7 +366,8 @@ class Trainer:
         disc_loss_total = 0.
         pesq_total = 0.
         pesq_count = 0
-        for idx, batch in enumerate(tqdm(self.test_ds)):
+        # Use disable_progress_bar to control verbosity
+        for idx, batch in enumerate(tqdm(self.test_ds, disable=args.disable_progress_bar)):
             step = idx + 1
             loss, disc_loss, pesq_raw = self.test_step(batch,use_disc)
             gen_loss_total += loss
@@ -261,7 +387,24 @@ class Trainer:
     def train(self):
         scheduler_G = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=args.decay_epoch, gamma=0.98)
         scheduler_D = torch.optim.lr_scheduler.StepLR(self.optimizer_disc, step_size=args.decay_epoch, gamma=0.98)
-        for epoch in range(args.epochs):
+
+        # Resume from checkpoint if requested
+        start_epoch = 0
+        if args.resume:
+            checkpoint_path = args.resume_path
+            if checkpoint_path is None:
+                checkpoint_path = find_latest_checkpoint(args.save_model_dir)
+
+            if checkpoint_path:
+                start_epoch = load_checkpoint(
+                    checkpoint_path, self.model, self.discriminator,
+                    self.optimizer, self.optimizer_disc,
+                    scheduler_G, scheduler_D
+                )
+            else:
+                logging.warning("No checkpoint found, starting from scratch")
+
+        for epoch in range(start_epoch, args.epochs):
             self.model.train()
             self.discriminator.train()
 
@@ -275,9 +418,22 @@ class Trainer:
             else:
                 use_disc = False
 
-            for idx, batch in enumerate(tqdm(self.train_ds)):
+            # Use disable_progress_bar to control verbosity
+            for idx, batch in enumerate(tqdm(self.train_ds, disable=args.disable_progress_bar)):
                 step = idx + 1
-                loss, disc_loss, pesq_raw = self.train_step(batch,use_disc)
+                try:
+                    loss, disc_loss, pesq_raw = self.train_step(batch,use_disc)
+                except ValueError as e:
+                    if "NaN" in str(e):
+                        logging.error(f"⚠️  Training stopped due to NaN at Epoch {epoch}, Step {step}")
+                        logging.error(f"   Saving emergency checkpoint before exit...")
+                        save_checkpoint(epoch, self.model, self.discriminator,
+                                      self.optimizer, self.optimizer_disc,
+                                      scheduler_G, scheduler_D, 999.0,
+                                      args.save_model_dir)
+                        raise
+                    else:
+                        raise
 
                 loss_total = loss_total + loss
                 loss_gan = loss_gan + disc_loss
@@ -291,12 +447,19 @@ class Trainer:
                     logging.info(template.format(epoch, step, loss_total/step, loss_gan/step, pesq_avg))
 
             gen_loss = self.test(use_disc)
+
+            # Save full checkpoint (NEW!)
+            save_checkpoint(epoch, self.model, self.discriminator,
+                          self.optimizer, self.optimizer_disc,
+                          scheduler_G, scheduler_D, gen_loss,
+                          args.save_model_dir)
+
+            # Also save old-style checkpoints for compatibility
             path = os.path.join(args.save_model_dir, 'gene_epoch_' + str(epoch) + '_' + str(gen_loss)[:5])
             path_d = os.path.join(args.save_model_dir, 'disc_epoch_' + str(epoch))
-            if not os.path.exists(args.save_model_dir):
-                os.makedirs(args.save_model_dir)
             torch.save(self.model.state_dict(), path)
             torch.save(self.discriminator.state_dict(), path_d)
+
             scheduler_G.step()
             scheduler_D.step()
 
