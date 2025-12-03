@@ -1,0 +1,8 @@
+Time is Tue Dec 2 22:10:03 CST 2025
+Directory is /ghome/fewahab/Sun-Models/Ab-6/M1
+This job runs on following nodes:
+Node:G105
+Gpus:G105-gpu2
+CUDA_VISIBLE_DEVICES:2
+<__main__.Config object at 0x7f88bd5f76d0>
+['NVIDIA GeForce RTX 3080 Ti']
