@@ -72,7 +72,7 @@ class MaskDecoderAdaptive(nn.Module):
         super().__init__()
         self.channels = channels
         self.band = torch.Tensor([2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 16, 17])
-        self.expansion = [2]*11 + [3]*12 + [4]*7  # Adaptive expansion
+        self.expansion = [2]*11 + [3]*12 + [4]*8  # Adaptive expansion (31 elements to match band array)
 
         for i in range(len(self.band)):
             exp = self.expansion[i]
