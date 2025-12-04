@@ -1,11 +1,14 @@
 """
-Ablation 2: Dual-Path BiMamba + Uniform Decoder
+MEMORY-OPTIMIZED Ablation 2: Dual-Path BiMamba + Uniform Decoder
 
-Model with both IntraBand and CrossBand bidirectional Mamba.
-Tests effectiveness of cross-band modeling.
+CRITICAL CHANGES from original:
+- num_layers: 4 → 2 (dual-path already doubles computation)
+- d_state: 16 → 12
+- Cross-band adds minimal memory but doubles forward passes
 
-Expected Performance: PESQ 3.1-3.2
-Parameters: ~4.42M
+Expected Performance: PESQ 2.95-3.05
+Parameters: ~3.7M
+Memory: Should fit with batch_size=6
 """
 
 import torch
@@ -21,20 +24,19 @@ from mamba import IntraBandBiMamba, CrossBandBiMamba, MaskDecoderUniform
 
 class MBS_Net(nn.Module):
     """
-    Ablation 2: Dual-Path Bidirectional Mamba + Uniform Decoder
+    MEMORY-OPTIMIZED Ablation 2
 
-    Architecture:
-        1. BandSplit (30 psychoacoustic bands): ~50K params
-        2. Dual-Path BiMamba (4 layers × [intra + cross]): ~920K params
-        3. Uniform Decoder (4x): ~3.45M params
-        Total: ~4.42M params
+    Changes:
+    - 2 layers instead of 4 (each layer has intra+cross = 2 operations)
+    - d_state=12 instead of 16
+    - Total: ~3.7M params
     """
     def __init__(
         self,
         num_channel=128,
-        num_layers=4,
+        num_layers=2,  # Reduced from 4
         num_bands=30,
-        d_state=16,
+        d_state=12,    # Reduced from 16
         chunk_size=32
     ):
         super().__init__()

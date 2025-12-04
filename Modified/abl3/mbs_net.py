@@ -1,11 +1,14 @@
 """
-Ablation 3: Full BS-BiMamba with Adaptive Decoder
+MEMORY-OPTIMIZED Ablation 3: Full BS-BiMamba with Adaptive Decoder
 
-Complete model with all novel components.
-Expected to achieve best performance with optimal parameter efficiency.
+CRITICAL CHANGES from original:
+- num_layers: 4 → 2
+- d_state: 16 → 12
+- Adaptive decoder uses LESS memory than uniform (1.85M vs 3.45M)
 
-Expected Performance: PESQ 3.2-3.5
-Parameters: ~2.82M
+Expected Performance: PESQ 3.0-3.1 (BEST of all 3 ablations)
+Parameters: ~2.3M (MOST EFFICIENT)
+Memory: Should fit with batch_size=6
 """
 
 import torch
@@ -21,25 +24,20 @@ from mamba import IntraBandBiMamba, CrossBandBiMamba, MaskDecoderAdaptive
 
 class MBS_Net(nn.Module):
     """
-    Ablation 3: Full BS-BiMamba with Adaptive Decoder
+    MEMORY-OPTIMIZED Ablation 3 (Full Model)
 
-    Architecture:
-        1. BandSplit (30 psychoacoustic bands): ~50K params
-        2. Dual-Path BiMamba (4 layers × [intra + cross]): ~920K params
-        3. Adaptive Decoder (2x/3x/4x): ~1.85M params
-        Total: ~2.82M params
-
-    This is the complete model with all three novel contributions:
-    - Bidirectional Mamba for temporal modeling
-    - Cross-band Mamba for spectral modeling
-    - Frequency-adaptive decoder for optimal parameter allocation
+    Changes:
+    - 2 layers instead of 4
+    - d_state=12 instead of 16
+    - Adaptive decoder (1.85M vs 3.45M uniform)
+    - Total: ~2.3M params (MOST EFFICIENT!)
     """
     def __init__(
         self,
         num_channel=128,
-        num_layers=4,
+        num_layers=2,  # Reduced from 4
         num_bands=30,
-        d_state=16,
+        d_state=12,    # Reduced from 16
         chunk_size=32
     ):
         super().__init__()

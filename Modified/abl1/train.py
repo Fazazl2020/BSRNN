@@ -64,15 +64,15 @@ class Trainer:
         self.train_ds = train_ds
         self.test_ds = test_ds
 
-        # Create model - Ablation 1
+        # Create model - Ablation 1 (MEMORY-OPTIMIZED)
         self.model = MBS_Net(
             num_channel=128,
-            num_layers=4,
+            num_layers=2,  # Reduced from 4 for memory
             num_bands=30,
-            d_state=16,
+            d_state=12,    # Reduced from 16 for memory
             chunk_size=32
         ).cuda()
-        logging.info("Ablation 1: IntraBand BiMamba + Uniform Decoder")
+        logging.info("Ablation 1: IntraBand BiMamba + Uniform Decoder (MEMORY-OPTIMIZED)")
 
         # Log parameter count
         total_params = sum(p.numel() for p in self.model.parameters())
