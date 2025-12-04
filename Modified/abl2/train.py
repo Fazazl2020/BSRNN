@@ -43,8 +43,8 @@ class TrainingConfig:
     resume_from_best = False
 
     # Data - EDIT THESE FOR YOUR SERVER
-    data_dir = '/root/Dataset'  # Change this to your data path
-    save_model_dir = './checkpoints_abl2'  # Saves in current directory
+    data_dir = '/gdata/fewahab/data/VoicebanK-demand-16K'  # Change this to your data path
+    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-6/M2/saved_model'  # Saves in current directory
 
     # Loss Weights
     loss_weights = [0.5, 0.5, 1]
@@ -64,12 +64,12 @@ class Trainer:
         self.train_ds = train_ds
         self.test_ds = test_ds
 
-        # Create model - Ablation 2
+        # Create model - Ablation 2 (MEMORY-OPTIMIZED)
         self.model = MBS_Net(
             num_channel=128,
-            num_layers=2  # Reduced from 4 for memory,
+            num_layers=2,  # Reduced from 4 for memory
             num_bands=30,
-            d_state=12    # Reduced from 16 for memory,
+            d_state=12,    # Reduced from 16 for memory
             chunk_size=32
         ).cuda()
         logging.info("Ablation 2: Dual-Path BiMamba + Uniform Decoder (MEMORY-OPTIMIZED)")
@@ -78,7 +78,7 @@ class Trainer:
         total_params = sum(p.numel() for p in self.model.parameters())
         trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         logging.info(f"Model parameters: Total={total_params/1e6:.2f}M, Trainable={trainable_params/1e6:.2f}M")
-        logging.info(f"Expected: ~4.42M params")
+        logging.info(f"Expected: ~3.7M params")
 
         self.discriminator = Discriminator(ndf=16).cuda()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=TrainingConfig.init_lr)
