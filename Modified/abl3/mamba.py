@@ -15,12 +15,12 @@ from real_mamba_optimized import MambaBlock
 
 class IntraBandBiMamba(nn.Module):
     """Bidirectional Mamba for temporal processing within each frequency band."""
-    def __init__(self, channels=128, d_state=16, d_conv=4, chunk_size=32):
+    def __init__(self, channels=128, d_state=16, d_conv=4, chunk_size=64, use_checkpoint=True):
         super().__init__()
         self.channels = channels
         self.norm = nn.LayerNorm(channels)
-        self.mamba_fwd = MambaBlock(d_model=channels, d_state=d_state, d_conv=d_conv, expand_factor=1, chunk_size=chunk_size)
-        self.mamba_bwd = MambaBlock(d_model=channels, d_state=d_state, d_conv=d_conv, expand_factor=1, chunk_size=chunk_size)
+        self.mamba_fwd = MambaBlock(d_model=channels, d_state=d_state, d_conv=d_conv, expand_factor=1, chunk_size=chunk_size, use_checkpoint=use_checkpoint)
+        self.mamba_bwd = MambaBlock(d_model=channels, d_state=d_state, d_conv=d_conv, expand_factor=1, chunk_size=chunk_size, use_checkpoint=use_checkpoint)
         self.combine = nn.Linear(2 * channels, channels)
 
     def forward(self, x):
@@ -37,13 +37,13 @@ class IntraBandBiMamba(nn.Module):
 
 class CrossBandBiMamba(nn.Module):
     """Bidirectional Mamba for cross-band (spectral) processing."""
-    def __init__(self, channels=128, d_state=16, d_conv=4, num_bands=30, chunk_size=32):
+    def __init__(self, channels=128, d_state=16, d_conv=4, num_bands=30, chunk_size=64, use_checkpoint=True):
         super().__init__()
         self.channels = channels
         self.num_bands = num_bands
         self.norm = nn.LayerNorm(channels)
-        self.mamba_fwd = MambaBlock(d_model=channels, d_state=d_state, d_conv=d_conv, expand_factor=1, chunk_size=chunk_size)
-        self.mamba_bwd = MambaBlock(d_model=channels, d_state=d_state, d_conv=d_conv, expand_factor=1, chunk_size=chunk_size)
+        self.mamba_fwd = MambaBlock(d_model=channels, d_state=d_state, d_conv=d_conv, expand_factor=1, chunk_size=chunk_size, use_checkpoint=use_checkpoint)
+        self.mamba_bwd = MambaBlock(d_model=channels, d_state=d_state, d_conv=d_conv, expand_factor=1, chunk_size=chunk_size, use_checkpoint=use_checkpoint)
         self.combine = nn.Linear(2 * channels, channels)
 
     def forward(self, x):

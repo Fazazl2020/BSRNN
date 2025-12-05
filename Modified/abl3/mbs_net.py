@@ -28,17 +28,18 @@ class MBS_Net(nn.Module):
 
     Changes:
     - 2 layers instead of 4
-    - d_state=12 instead of 16
+    - d_state=16 instead of 16
     - Adaptive decoder (1.85M vs 3.45M uniform)
     - Total: ~2.3M params (MOST EFFICIENT!)
     """
     def __init__(
         self,
         num_channel=128,
-        num_layers=2,  # Reduced from 4
+        num_layers=1,  # Reduced from 4
         num_bands=30,
-        d_state=12,    # Reduced from 16
-        chunk_size=32
+        d_state=16,    # Reduced from 16
+        chunk_size=64,
+        use_checkpoint=True
     ):
         super().__init__()
         self.num_channel = num_channel
@@ -50,8 +51,8 @@ class MBS_Net(nn.Module):
         self.encoder_layers = nn.ModuleList()
         for _ in range(num_layers):
             self.encoder_layers.append(nn.ModuleDict({
-                'intra_band': IntraBandBiMamba(channels=num_channel, d_state=d_state, d_conv=4, chunk_size=chunk_size),
-                'cross_band': CrossBandBiMamba(channels=num_channel, d_state=d_state, d_conv=4, num_bands=num_bands, chunk_size=chunk_size)
+                'intra_band': IntraBandBiMamba(channels=num_channel, d_state=d_state, d_conv=4, chunk_size=chunk_size, use_checkpoint=use_checkpoint),
+                'cross_band': CrossBandBiMamba(channels=num_channel, d_state=d_state, d_conv=4, num_bands=num_bands, chunk_size=chunk_size, use_checkpoint=use_checkpoint)
             }))
 
         self.decoder = MaskDecoderAdaptive(channels=num_channel)
