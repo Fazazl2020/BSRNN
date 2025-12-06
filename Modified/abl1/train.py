@@ -50,7 +50,7 @@ class TrainingConfig:
 
     # Data - EDIT THESE FOR YOUR SERVER
     data_dir = '/gdata/fewahab/data/VoicebanK-demand-16K'
-    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-6/M1/saved_model'
+    save_model_dir = '/ghome/fewahab/Sun-Models/Ab-6/M2/saved_model'
 
     # Loss Weights
     loss_weights = [0.5, 0.5, 1]
@@ -130,7 +130,7 @@ class Trainer:
         if is_best:
             best_path = os.path.join(TrainingConfig.save_model_dir, 'best_model.pth')
             torch.save(checkpoint, best_path)
-            logging.info(f"✓ New best model saved! Loss: {gen_loss:.6f}")
+            logging.info(f"? New best model saved! Loss: {gen_loss:.6f}")
 
         if (epoch + 1) % 5 == 0:
             epoch_ckpt = os.path.join(TrainingConfig.save_model_dir, f'checkpoint_epoch_{epoch+1}.pth')
@@ -148,7 +148,7 @@ class Trainer:
         self.best_loss = checkpoint.get('best_loss', float('inf'))
         self.start_epoch = checkpoint['epoch'] + 1
 
-        logging.info(f"✓ Resumed from epoch {checkpoint['epoch']}")
+        logging.info(f"? Resumed from epoch {checkpoint['epoch']}")
 
     def train_step(self, batch, use_disc):
         clean = batch[0].cuda()
