@@ -1,0 +1,27 @@
+⚠️⚠️⚠️ WARNING ⚠️⚠️⚠️
+
+The script "update_all_train.py" has been DEPRECATED and renamed to:
+"update_all_train.py.DEPRECATED"
+
+DO NOT RUN THIS SCRIPT!
+
+REASON:
+This script adds mixed precision training (autocast, GradScaler) to all train.py files.
+Mixed precision causes ComplexHalf conversion which leads to NaN loss at epoch 5.
+
+ROOT CAUSE OF NAN LOSS:
+- Mixed precision (autocast) converts complex64 → ComplexHalf (FP16)
+- ComplexHalf is experimental and numerically unstable
+- Complex multiplication in FP16 causes catastrophic cancellation
+- Result: NaN loss at epoch 5
+
+SOLUTION:
+All train.py files have been fixed to remove mixed precision training.
+They now use stable FP32 (complex64) like the baseline.
+
+COMMIT: 4fb27be - "Fix NaN loss issue by removing mixed precision training"
+
+If you need to update train.py files, edit them manually.
+DO NOT use the deprecated update_all_train.py script.
+
+Date: 2025-12-06
